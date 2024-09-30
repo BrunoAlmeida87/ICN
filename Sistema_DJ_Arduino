@@ -1,0 +1,125 @@
+#include <Wire.h>
+#include <MPU6050.h>
+#include <LedControl.h>
+
+// Inicializa o giroscópio e o display de LED
+MPU6050 gyro;
+LedControl lc = LedControl(11, 13, 10, 1); // (DIN, CLK, CS, Número de displays)
+
+// Variáveis para cálculo do ângulo
+float angleX = 0.0;
+unsigned long lastTime = 0;
+
+
+// Padrões para números de -10 a 10 e um X para ângulos fora do alcance
+const byte patterns[22][8] = {
+ {0x00, 0x00, 0x00, 0x00, 0x1E, 0x12, 0x12, 0xF2},  // -10
+  {0x00, 0x00, 0x00, 0x00, 0x9E, 0x92, 0x92, 0xF2},  // -9
+  {0x08, 0x08, 0x00, 0x00, 0xEF, 0x99, 0x99, 0xE7},  // -8
+  {0x08, 0x08, 0x00, 0x07, 0x01, 0x01, 0xFF, 0x00},  // -7
+  {0x08, 0x08, 0x00, 0x00, 0xFE, 0x92, 0x92, 0xF2},  // -6
+  {0x08, 0x08, 0x00, 0x00, 0x9E, 0x92, 0x92, 0xF2},  // -5
+  {0x08, 0x08, 0x00, 0x18, 0x14, 0x12, 0x13, 0xFF},  // -4
+  {0x08, 0x08, 0x08, 0x00, 0x91, 0x91, 0x91, 0xFF},  // -3
+  {0x08, 0x08, 0x00, 0xF1, 0x91, 0x91, 0x91, 0x9F},  // -2
+  {0x08, 0x08, 0x08, 0x00, 0x84, 0x82, 0xFF, 0x80},  // -1
+  {0x00, 0x00, 0x00, 0x00, 0xFE, 0x82, 0x82, 0xFE},  // 0
+  {0x08, 0x1C, 0x08, 0x00, 0x84, 0x82, 0xFF, 0x80},  // +1
+  {0x00, 0x00, 0x00, 0x00, 0xF1, 0x91, 0x91, 0x9F},  // +2
+  {0x00, 0x00, 0x00, 0x00, 0x91, 0x91, 0x91, 0xFF},  // +3
+  {0x00, 0x00, 0x00, 0x18, 0x14, 0x12, 0x13, 0xFF},  // +4
+  {0x00, 0x00, 0x00, 0x00, 0x9E, 0x92, 0x92, 0xF2},  // +5
+  {0x00, 0x00, 0x00, 0x00, 0xFE, 0x92, 0x92, 0xF2},  // +6
+  {0x00, 0x00, 0x00, 0x07, 0x01, 0x01, 0xFF, 0x00},  // +7
+  {0x00, 0x00, 0x00, 0x00, 0xEF, 0x99, 0x99, 0xE7},  // +8
+  {0x00, 0x00, 0x00, 0x00, 0x9E, 0x92, 0x92, 0xFE},  // +9
+  {0x00, 0x00, 0x00, 0x00, 0x1E, 0x12, 0x12, 0xFE},   // +10
+
+
+  // X para ângulos fora do alcance
+  {0x81,0x42,0x24,0x18,0x18,0x24,0x42,0x81}   // X
+};
+
+
+// Declaração das funções antes do setup e loop
+void displayPattern(int index);
+void displayError();
+
+#define NUM_READINGS 10 // Número de leituras para calcular a média
+
+int readings[NUM_READINGS]; // Array para armazenar leituras
+int readIndex = 0; // Índice para rastrear a leitura atual
+int total = 0; // Soma total das leituras
+int averageAngle = 0; // Ângulo médio
+
+void setup() {
+  Wire.begin();
+  gyro.initialize();
+  Serial.begin(9600);
+  lc.shutdown(0, false);     
+  lc.setIntensity(0, 8);    
+  lc.clearDisplay(0);       
+  
+  if (!gyro.testConnection()) {
+    displayError();
+  }
+
+  // Inicializa as leituras para 0
+  for (int i = 0; i < NUM_READINGS; i++) {
+    readings[i] = 0;
+  }
+}
+
+void loop() {
+  int16_t accX, accY, accZ;
+  int angleX;
+
+  // Lê os valores do acelerômetro
+  gyro.getAcceleration(&accX, &accY, &accZ);
+  
+  // Calcula o ângulo em graus em relação ao eixo X (terra)
+  angleX = atan2(accY, accZ) * 180 / PI; 
+  
+  // Atualiza a média móvel
+  total = total - readings[readIndex]; // Subtrai a leitura antiga
+  readings[readIndex] = angleX; // Armazena a nova leitura
+  total = total + readings[readIndex]; // Adiciona a nova leitura
+  readIndex = (readIndex + 1) % NUM_READINGS; // Atualiza o índice
+  
+  // Calcula o ângulo médio
+  averageAngle = total / NUM_READINGS;
+
+    // Reduz a amplitude dividindo por 2
+  averageAngle = averageAngle / 2;
+  
+  // Limita o ângulo para o intervalo entre -10 e +10
+  int index = constrain(averageAngle, -10, 10) + 10; // Converte para índice da matriz
+
+  // Exibe o X se o ângulo estiver fora do alcance
+  if (averageAngle > 10 || averageAngle < -10) {
+    displayPattern(21); // Mostra "X"
+  } else {
+    displayPattern(index); // Mostra o número correspondente
+  }
+
+  // Exibe o ângulo médio no Monitor Serial
+  Serial.print("Ângulo X: ");
+  Serial.println(averageAngle);
+
+  delay(100); // Aguarda 100 ms antes de atualizar
+}
+
+// Função para exibir o padrão correspondente
+void displayPattern(int index) {
+  for (int row = 0; row < 8; row++) {
+    lc.setRow(0, row, patterns[index][row]);
+  }
+}
+
+// Função para mostrar erro no display
+void displayError() {
+  for (int row = 0; row < 8; row++) {
+    lc.setRow(0, row, B11111111); // Acende todos os LEDs para indicar erro
+  }
+  while (1); // Fica em loop infinito
+}
